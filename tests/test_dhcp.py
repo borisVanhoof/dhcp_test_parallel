@@ -4,6 +4,14 @@ import time
 import uuid
 import pytest
 import os
+import queue
+
+def log_consumer(log_queue):
+    while True:
+        entry = log_queue.get()
+        if entry is None:
+            break
+        print(entry)
 
 def stream_output(pipe, label, buffer):
     for line in iter(pipe.readline, ''):
@@ -45,6 +53,10 @@ def dhcp_test_env():
     server_ip = "10.0.0.1"
     offered_ip = "10.0.0.100"
 
+    log_queue = queue.Queue()
+    log_thread = threading.Thread(target=log_consumer, args=(log_queue,), daemon=True)
+    log_thread.start()
+
     # Setup veth and namespaces
     subprocess.run(f"sudo ip link add {veth0} type veth peer name {veth1}", shell=True, check=True)
     subprocess.run(f"sudo ip netns add {ns_server}", shell=True, check=True)
@@ -76,6 +88,9 @@ def dhcp_test_env():
     subprocess.run(f"sudo ip netns del {ns_client}", shell=True, stderr=subprocess.DEVNULL)
     subprocess.run(f"sudo ip link del {veth0}", shell=True, stderr=subprocess.DEVNULL)
 
+    log_queue.put(None)   # 🔚 sentinel to stop consumer
+    log_thread.join()
+
 def test_dhcp_dora(dhcp_test_env):
     ns_server, ns_client, veth0, veth1, server_ip, offered_ip = dhcp_test_env
 
@@ -98,7 +113,6 @@ def test_dhcp_dora(dhcp_test_env):
         print("📥 dhclient finished, checking output...")
         combined_out = ''.join(client_out + client_err)
         assert "bound to 10.0.0.100" in combined_out
-        assert False
 
     except subprocess.TimeoutExpired:
         print("⏰ dhclient timed out!")
