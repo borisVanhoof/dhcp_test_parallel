@@ -42,6 +42,8 @@ def dhcp_test_env_with_tcpdump():
 
     yield ns_server, ns_client, veth0, veth1, server_ip, offered_ip, pcap_file
 
+    time.sleep(1)
+
     # Teardown
     tcpdump_proc.terminate()
     tcpdump_proc.wait()
@@ -71,6 +73,7 @@ def test_dhcp_dora(dhcp_test_env_with_tcpdump):
     time.sleep(2)
 
     print("🔄 Running dhclient...")
+
     try:
         result = subprocess.run(
             ["sudo", "ip", "netns", "exec", ns_client, "dhclient", "-v", veth1],

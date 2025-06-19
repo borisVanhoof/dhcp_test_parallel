@@ -14,7 +14,7 @@ def handle_pkt(pkt):
         ether = Ether(dst=pkt[Ether].src, src=server_mac)
         ip = IP(src=server_ip, dst="255.255.255.255")
         udp = UDP(sport=67, dport=68)
-        bootp = BOOTP(op=2, yiaddr=offered_ip, siaddr=server_ip, chaddr=pkt[BOOTP].chaddr)
+        bootp = BOOTP(op=2, yiaddr=offered_ip, siaddr=server_ip, chaddr=pkt[BOOTP].chaddr, xid=pkt[BOOTP].xid)
         dhcp = DHCP(options=[
             ("message-type", "offer"),
             ("server_id", server_ip),
@@ -29,7 +29,7 @@ def handle_pkt(pkt):
         ether = Ether(dst=pkt[Ether].src, src=server_mac)
         ip = IP(src=server_ip, dst="255.255.255.255")
         udp = UDP(sport=67, dport=68)
-        bootp = BOOTP(op=2, yiaddr=offered_ip, siaddr=server_ip, chaddr=pkt[BOOTP].chaddr)
+        bootp = BOOTP(op=2, yiaddr=offered_ip, siaddr=server_ip, chaddr=pkt[BOOTP].chaddr, xid=pkt[BOOTP].xid)
         dhcp = DHCP(options=[
             ("message-type", "ack"),
             ("server_id", server_ip),
