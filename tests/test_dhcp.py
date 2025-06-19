@@ -1,8 +1,26 @@
 import subprocess
+import threading
 import time
 import uuid
 import pytest
 import os
+
+def stream_output(pipe, label, buffer):
+    for line in iter(pipe.readline, ''):
+        print(f"[{label}] {line}", end='')
+        buffer.append(line)
+
+def start_logged_process(cmd, label):
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    out_buf, err_buf = [], []
+    threading.Thread(target=stream_output, args=(proc.stdout, f"{label}-out", out_buf), daemon=True).start()
+    threading.Thread(target=stream_output, args=(proc.stderr, f"{label}-err", err_buf), daemon=True).start()
+    return proc, out_buf, err_buf
 
 @pytest.fixture
 def dhcp_test_env_with_tcpdump():
@@ -60,52 +78,47 @@ def test_dhcp_dora(dhcp_test_env_with_tcpdump):
     print(f"🕵️ Inspect traffic with: sudo tcpdump -r {pcap_file}")
 
     print("🚀 Starting DHCP server subprocess")
-    server_proc = subprocess.Popen(
-        [
-            "sudo", "ip", "netns", "exec", ns_server,
-            f"{os.getcwd()}/venv/bin/python", "scripts/dhcp_server.py", veth0, server_ip, offered_ip
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    server_cmd = [
+        "sudo", "ip", "netns", "exec", ns_server,
+        f"{os.getcwd()}/venv/bin/python", "scripts/dhcp_server.py", veth0, server_ip, offered_ip
+    ]
+    server_proc, server_out, server_err = start_logged_process(server_cmd, "scapy")
 
     time.sleep(2)
 
     print("🔄 Running dhclient...")
+    client_cmd = ["sudo", "ip", "netns", "exec", ns_client, "dhclient", "-v", veth1]
 
     try:
-        result = subprocess.run(
-            ["sudo", "ip", "netns", "exec", ns_client, "dhclient", "-v", veth1],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=15
-        )
+        client_proc, client_out, client_err = start_logged_process(client_cmd, "dhclient")
+        client_proc.wait(timeout=15)
 
-        print("📥 dhclient output:")
-        print(result.stdout)
+        print("📥 dhclient finished, checking output...")
+        combined_out = ''.join(client_out + client_err)
+        assert "bound to 10.0.0.100" in combined_out
 
-        assert "bound to 10.0.0.100" in result.stdout
-
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         print("⏰ dhclient timed out!")
 
-        # Collect server output even if test fails
-        server_proc.terminate()
-        out, err = server_proc.communicate()
         print("🖨️ DHCP server stdout:")
-        print(out)
+        print(''.join(server_out))
         print("🛑 DHCP server stderr:")
-        print(err)
+        print(''.join(server_err))
 
-        raise  # Re-raise so pytest sees the failure
+        print("🖨️ dhclient stdout/stderr:")
+        print(''.join(client_out + client_err))
 
-    else:
-        # If dhclient succeeded, cleanly stop server
+        raise
+
+    finally:
         server_proc.terminate()
-        out, err = server_proc.communicate()
-        print("🖨️ DHCP server stdout:")
-        print(out)
-        print("🛑 DHCP server stderr:")
-        print(err)
+        client_proc.terminate()
+        try:
+            server_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            server_proc.kill()
+
+        try:
+            client_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            client_proc.kill()
