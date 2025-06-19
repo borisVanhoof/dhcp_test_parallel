@@ -22,8 +22,21 @@ def start_logged_process(cmd, label):
     threading.Thread(target=stream_output, args=(proc.stderr, f"{label}-err", err_buf), daemon=True).start()
     return proc, out_buf, err_buf
 
+def start_dhcp_log_stream(ns_name, iface, label="tshark"):
+    """
+    Runs tshark in a network namespace and streams DHCP packet summaries.
+    Returns the subprocess and a background thread.
+    """
+    cmd = [
+        "sudo", "ip", "netns", "exec", ns_name,
+        "tshark", "-i", iface,
+        "-l",
+        "-f", "udp port 67 or udp port 68"
+    ]
+    return start_logged_process(cmd, label)
+
 @pytest.fixture
-def dhcp_test_env_with_tcpdump():
+def dhcp_test_env():
     ns_id = uuid.uuid4().hex[:8]
     ns_server = f"ns_srv_{ns_id}"
     ns_client = f"ns_cli_{ns_id}"
@@ -42,40 +55,29 @@ def dhcp_test_env_with_tcpdump():
     subprocess.run(f"sudo ip netns exec {ns_server} ip link set {veth0} up", shell=True, check=True)
     subprocess.run(f"sudo ip netns exec {ns_client} ip link set {veth1} up", shell=True, check=True)
 
-    # Resolve client interface name
-    iface_out = subprocess.check_output([
-        "sudo", "ip", "netns", "exec", ns_client, "ip", "-o", "link"
-    ], text=True)
-    iface_name = next(line.split(": ")[1].split("@")[0]
-                      for line in iface_out.splitlines() if "veth" in line)
+    # Start tshark logger
+    tshark_proc, tshark_out, tshark_err = start_dhcp_log_stream(ns_client, veth1)
 
-    # Start tcpdump
-    pcap_file = f"/tmp/dhcp-test-{ns_id}.pcap"
-    tcpdump_proc = subprocess.Popen([
-        "sudo", "ip", "netns", "exec", ns_client,
-        "tcpdump", "-i", iface_name, "-w", pcap_file, "-n", "-U"
-    ])
+    time.sleep(1)  # Let tshark warm up
 
-    time.sleep(1)  # Let tcpdump warm up
+    yield ns_server, ns_client, veth0, veth1, server_ip, offered_ip
 
-    yield ns_server, ns_client, veth0, veth1, server_ip, offered_ip, pcap_file
+    # Teardown
 
     time.sleep(1)
 
-    # Teardown
-    tcpdump_proc.terminate()
-    tcpdump_proc.wait()
+    tshark_proc.terminate()
+    try:
+        tshark_proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        tshark_proc.kill()
 
     subprocess.run(f"sudo ip netns del {ns_server}", shell=True, stderr=subprocess.DEVNULL)
     subprocess.run(f"sudo ip netns del {ns_client}", shell=True, stderr=subprocess.DEVNULL)
     subprocess.run(f"sudo ip link del {veth0}", shell=True, stderr=subprocess.DEVNULL)
 
-    print(f"🐾 pcap saved to {pcap_file}")
-
-def test_dhcp_dora(dhcp_test_env_with_tcpdump):
-    ns_server, ns_client, veth0, veth1, server_ip, offered_ip, pcap_file = dhcp_test_env_with_tcpdump
-
-    print(f"🕵️ Inspect traffic with: sudo tcpdump -r {pcap_file}")
+def test_dhcp_dora(dhcp_test_env):
+    ns_server, ns_client, veth0, veth1, server_ip, offered_ip = dhcp_test_env
 
     print("🚀 Starting DHCP server subprocess")
     server_cmd = [
@@ -96,6 +98,7 @@ def test_dhcp_dora(dhcp_test_env_with_tcpdump):
         print("📥 dhclient finished, checking output...")
         combined_out = ''.join(client_out + client_err)
         assert "bound to 10.0.0.100" in combined_out
+        assert False
 
     except subprocess.TimeoutExpired:
         print("⏰ dhclient timed out!")
