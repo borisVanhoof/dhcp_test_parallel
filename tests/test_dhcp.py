@@ -99,15 +99,6 @@ def test_dhcp_dora(dhcp_test_env_with_tcpdump):
 
     except subprocess.TimeoutExpired:
         print("⏰ dhclient timed out!")
-
-        print("🖨️ DHCP server stdout:")
-        print(''.join(server_out))
-        print("🛑 DHCP server stderr:")
-        print(''.join(server_err))
-
-        print("🖨️ dhclient stdout/stderr:")
-        print(''.join(client_out + client_err))
-
         raise
 
     finally:
